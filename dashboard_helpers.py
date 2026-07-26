@@ -2,9 +2,9 @@
 Reusable dashboard helpers for the Grazioso Salvare enhancement.
 
 This module prepares the ranked scoring results for display in the
-dashboard. It keeps data preparation, candidate selection, and export
-logic outside the dashboard callbacks so each part can be tested
-separately.
+dashboard. It keeps data preparation, candidate selection, export,
+and reusable location logic outside the dashboard callbacks so each
+part can be tested separately.
 """
 
 from __future__ import annotations
@@ -12,6 +12,21 @@ from __future__ import annotations
 from typing import Any
 
 import pandas as pd
+
+
+NO_LOCATION_MESSAGE = "No location information"
+
+# These values represent missing location data after converting a
+# scalar value to text. Casefolding keeps the comparison consistent.
+MISSING_LOCATION_VALUES = {
+    "",
+    "<na>",
+    "nan",
+    "none",
+    "not available",
+    "unavailable",
+    NO_LOCATION_MESSAGE.casefold(),
+}
 
 
 # These are the only columns shown in the ranked candidate table.
@@ -93,6 +108,53 @@ VALID_RESCUE_TYPES = {
 }
 
 
+def has_usable_location(
+    location: Any,
+) -> bool:
+    """
+    Return True when a location contains usable text.
+    """
+
+    if location is None:
+        return False
+
+    # Check pandas missing values before converting to text.
+    # This keeps pd.NA and NaN from reaching the map.
+    try:
+        missing_result = pd.isna(location)
+
+        if isinstance(missing_result, bool) and missing_result:
+            return False
+    except (TypeError, ValueError):
+        pass
+
+    clean_location = str(
+        location
+    ).strip()
+
+    return (
+        clean_location.casefold()
+        not in MISSING_LOCATION_VALUES
+    )
+
+
+def get_display_location(
+    location: Any,
+) -> str:
+    """
+    Preserve usable location text or return the standard message.
+    """
+
+    if not has_usable_location(
+        location
+    ):
+        return NO_LOCATION_MESSAGE
+
+    return str(
+        location
+    ).strip()
+
+
 def validate_ranked_results(
     ranked_results: dict[str, pd.DataFrame],
 ) -> None:
@@ -100,7 +162,10 @@ def validate_ranked_results(
     Make sure the dashboard received all three mission results.
     """
 
-    if not isinstance(ranked_results, dict):
+    if not isinstance(
+        ranked_results,
+        dict,
+    ):
         raise TypeError(
             "Ranked results must be provided as a dictionary."
         )
@@ -117,7 +182,9 @@ def validate_ranked_results(
 
     if missing_missions:
         missing_list = ", ".join(
-            sorted(missing_missions)
+            sorted(
+                missing_missions
+            )
         )
 
         raise ValueError(
@@ -157,7 +224,9 @@ def build_all_candidates_view(
         "disaster",
     ):
         mission_dataframe = (
-            ranked_results[rescue_type]
+            ranked_results[
+                rescue_type
+            ]
             .copy()
         )
 
@@ -202,7 +271,9 @@ def build_all_candidates_view(
     )
 
     animal_ids = (
-        combined_dataframe["animal_id"]
+        combined_dataframe[
+            "animal_id"
+        ]
         .fillna("")
         .astype(str)
         .str.strip()
@@ -215,7 +286,9 @@ def build_all_candidates_view(
             animal_ids.ne("")
         ]
         .drop_duplicates(
-            subset=["animal_id"],
+            subset=[
+                "animal_id"
+            ],
             keep="first",
         )
     )
@@ -256,12 +329,16 @@ def build_all_candidates_view(
             ],
             kind="mergesort",
         )
-        .reset_index(drop=True)
+        .reset_index(
+            drop=True
+        )
     )
 
     # The All view receives its own overall rank so the rank still
     # matches the order shown in the dashboard.
-    all_candidates["rescue_rank"] = (
+    all_candidates[
+        "rescue_rank"
+    ] = (
         all_candidates.index + 1
     )
 
@@ -304,7 +381,10 @@ def get_table_dataframe(
 
     normalized_type = (
         rescue_type.strip().lower()
-        if isinstance(rescue_type, str)
+        if isinstance(
+            rescue_type,
+            str,
+        )
         else "all"
     )
 
@@ -351,9 +431,15 @@ def get_table_dataframe(
     # pandas missing-value markers in the dashboard.
     for column in text_columns:
         if column in table_dataframe.columns:
-            table_dataframe[column] = (
-                table_dataframe[column]
-                .fillna("Not available")
+            table_dataframe[
+                column
+            ] = (
+                table_dataframe[
+                    column
+                ]
+                .fillna(
+                    "Not available"
+                )
                 .astype(str)
                 .str.strip()
                 .replace(
@@ -362,24 +448,17 @@ def get_table_dataframe(
                 )
             )
 
-    # Location uses a more direct message because it is also used
-    # by the map panel.
+    # Use the same location cleanup everywhere the dashboard
+    # displays or geocodes the matched intake location.
     if "found_location" in table_dataframe.columns:
-        table_dataframe["found_location"] = (
-            table_dataframe["found_location"]
-            .fillna("No location information")
-            .astype(str)
-            .str.strip()
-            .replace(
-                {
-                    "": "No location information",
-                    "<NA>": "No location information",
-                    "nan": "No location information",
-                    "None": "No location information",
-                    "Not available": (
-                        "No location information"
-                    ),
-                }
+        table_dataframe[
+            "found_location"
+        ] = (
+            table_dataframe[
+                "found_location"
+            ]
+            .map(
+                get_display_location
             )
         )
 
@@ -394,9 +473,13 @@ def get_table_dataframe(
 
     for column in numeric_columns:
         if column in table_dataframe.columns:
-            table_dataframe[column] = (
+            table_dataframe[
+                column
+            ] = (
                 pd.to_numeric(
-                    table_dataframe[column],
+                    table_dataframe[
+                        column
+                    ],
                     errors="coerce",
                 )
             )
@@ -406,13 +489,13 @@ def get_table_dataframe(
 
 def get_selected_candidate(
     view_data: list[dict[str, Any]] | None,
-    active_cell: dict[str, Any] | None,
+    selected_rows: list[int] | None,
 ) -> dict[str, Any] | None:
     """
-    Return the candidate from the row the user clicked.
+    Return the candidate from the selected table row.
 
-    The active cell identifies the row, but the dashboard will
-    highlight the entire row instead of leaving one cell selected.
+    The first row is used by default when the table contains records
+    but no valid selected row is available.
     """
 
     if not view_data:
@@ -420,14 +503,23 @@ def get_selected_candidate(
 
     selected_index = 0
 
-    if isinstance(active_cell, dict):
-        possible_index = active_cell.get(
-            "row"
+    if (
+        isinstance(
+            selected_rows,
+            list,
         )
+        and selected_rows
+    ):
+        possible_index = selected_rows[0]
 
         if (
-            isinstance(possible_index, int)
-            and 0 <= possible_index < len(view_data)
+            isinstance(
+                possible_index,
+                int,
+            )
+            and 0 <= possible_index < len(
+                view_data
+            )
         ):
             selected_index = possible_index
 
@@ -435,17 +527,23 @@ def get_selected_candidate(
         selected_index
     ]
 
-    if not isinstance(candidate, dict):
+    if not isinstance(
+        candidate,
+        dict,
+    ):
         return None
 
     return candidate
 
 
 def build_selected_row_styles(
-    active_cell: dict[str, Any] | None,
+    selected_rows: list[int] | None,
 ) -> list[dict[str, Any]]:
     """
-    Build table styles that highlight only the active row.
+    Build table styles that highlight the selected row.
+
+    The selected row receives a consistent background and border across
+    all of its cells.
     """
 
     styles = [
@@ -461,27 +559,26 @@ def build_selected_row_styles(
             },
             "backgroundColor": "white",
         },
-
-        # Keep the clicked cell visually consistent with the row.
-        {
-            "if": {
-                "state": "active",
-            },
-            "backgroundColor": "#dbeafe",
-            "border": "1px solid #2563eb",
-        },
     ]
 
-    if not isinstance(active_cell, dict):
+    if (
+        not isinstance(
+            selected_rows,
+            list,
+        )
+        or not selected_rows
+    ):
         return styles
 
-    selected_row = active_cell.get(
-        "row"
-    )
+    selected_row = selected_rows[0]
 
-    if not isinstance(selected_row, int):
+    if not isinstance(
+        selected_row,
+        int,
+    ):
         return styles
 
+    # Highlight every cell in the selected row.
     styles.append(
         {
             "if": {
